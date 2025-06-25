@@ -1,0 +1,123 @@
+---
+title: 前端資安宇宙（五）- SSTI 與 CSTI 是什麼？
+date: '2025-06-24'
+tags: ['資安', 'XSS', '前端']
+draft: false
+summary: 'HTML只能一個單純的標記語言？，還可以拿來執行JavaScript呢！'
+---
+
+## 前言
+
+在前端與全端開發中，我們常常聽到 XSS（跨站腳本攻擊），但其實有兩種非常接近但又常被忽略的攻擊手法：
+
+- **SSTI**（Server-Side Template Injection，伺服器端模板注入）
+- **CSTI**（Client-Side Template Injection，前端模板注入）
+
+這篇文章將帶你認識這兩種攻擊方式，並用實際範例了解它們是怎麼發生的、為什麼危險，以及該如何防範。
+
+---
+
+## SSTI 是什麼？（Server-Side Template Injection）
+
+SSTI 指的是：攻擊者將惡意輸入注入到後端模板語法中，導致伺服器執行這些模板表達式，甚至可能執行系統命令。
+這常見於使用 EJS、Pug、Nunjucks、Jinja2（Python）等模板引擎時，開發者不小心把使用者輸入當作模板片段來渲染。
+
+### Node.js + EJS 範例
+
+```js
+const express = require('express')
+const app = express()
+const ejs = require('ejs')
+
+app.get('/greet', (req, res) => {
+  const name = req.query.name
+  // 危險！直接把使用者輸入插進模板語法中
+  const template = `<h1>Hello <%= ${name} %></h1>`
+  const html = ejs.render(template)
+  res.send(html)
+})
+
+app.listen(3000, () => {
+  console.log('Server running on http://localhost:3000')
+})
+```
+
+### 測試網址
+
+```
+http://localhost:3000/greet?name=process.mainModule.require('child_process').execSync('ls').toString()
+```
+
+### 測試結果畫面：
+
+頁面會顯示：
+
+```
+Hello app.js node_modules package-lock.json package.json
+```
+
+代表系統的 `ls` 指令真的被執行了！
+
+### 防禦方式
+
+```js
+const template = `<h1>Hello <%= name %></h1>`
+const html = ejs.render(template, { name }) //  安全：只傳變數進模板，不拼接語法
+```
+
+---
+
+## CSTI 是什麼？（Client-Side Template Injection）
+
+CSTI 指的是：攻擊者將惡意表達式注入到前端框架的模板語法中，讓瀏覽器執行這些表達式，進而達成 XSS 攻擊。
+這最常見的例子就是 AngularJS（1.x），因為它允許 `{{ expression }}` 中直接執行 JavaScript 表達式。
+
+### AngularJS CSTI 攻擊範例
+
+```html
+<!DOCTYPE html>
+<html ng-app>
+  <head>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.8.2/angular.min.js"></script>
+  </head>
+  <body>
+    <input type="text" ng-model="userInput" />
+    <div>{{ userInput }}</div>
+  </body>
+</html>
+```
+
+#### 測試攻擊字串：
+
+```md
+{{constructor.constructor('alert("CSTI!")')()}}
+```
+
+### 測試結果畫面：
+
+只要輸入上面這段內容，AngularJS 就會彈出一個 `alert("CSTI!")` 的對話框，證明它執行了輸入內容。
+
+### 現代框架還會發生嗎？
+
+不會。像 Vue、React、Angular 2+ 等框架：
+
+- 都會自動 escape `{{}}` 中的內容
+- 只支援簡單的變數與基本表達式
+- 不允許 `constructor.constructor(...)` 這類語法
+
+### 但注意：你用 `v-html` 或 `dangerouslySetInnerHTML` 時，還是會暴露風險！
+
+---
+
+## 防禦清單與實務建議
+
+### SSTI 防禦：
+
+- 永遠不要把使用者的輸入當作模板語法的一部分去解析
+- 僅使用變數傳入模板（例如 `render(template, { name })`）
+- 模板應該寫在模板檔案中，不要拼接模板字串
+
+### CSTI 防禦：
+
+- 永遠不要把使用者輸入直接插入 `v-html` 或 `dangerouslySetInnerHTML` 中
+- 若真的需要插入 HTML，請先經過 DOMPurify 或其他消毒工具處理

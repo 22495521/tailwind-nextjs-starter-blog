@@ -1,0 +1,272 @@
+---
+title: 前端資安宇宙（二）- XSS的攻擊與防禦
+date: '2025-06-20'
+tags: ['資安', 'XSS', '前端']
+draft: false
+summary: '這篇文章整理前端開發中常見的 XSS 攻擊類型與實用防禦技巧，從 React sanitization 到 CSP 設定。'
+---
+
+## 防禦XSS的三大防線
+
+XSS（跨站腳本攻擊）是目前前端最常見的資安問題之一。  
+本章介紹三道主要的防禦手法：
+
+1. 第一道防線：在程式碼層「移除危險內容」（Sanitization）
+2. 第二道防線：在瀏覽器層「阻止執行」（CSP）
+3. 第三道防線：在應用層「降低攻擊影響」（Damage Control）
+
+---
+
+### 第一道防線：React 中的 Sanitization（消毒）
+
+在 React 中，預設顯示文字是安全的，因為 React 會自動對內容進行 HTML escape，避免使用者輸入被當成 HTML 或 JavaScript 執行。
+
+#### 安全寫法：使用 JSX 表達純文字
+
+```jsx
+// 假設 userInput 是 "<script>alert('XSS')</script>"
+<p>{userInput}</p>
+// 輸出：<p>&lt;script&gt;alert('XSS')&lt;/script&gt;</p>
+```
+
+React 會自動將 `<`, `>`, `&` 等符號轉義，不會執行 script，是預設安全的方式。
+
+#### 危險寫法：使用 dangerouslySetInnerHTML
+
+```jsx
+<p dangerouslySetInnerHTML={{ __html: userInput }} />
+```
+
+如果 `userInput = "<img src=x onerror=alert('XSS')>"`，這段會真的插入 `<img>` 並觸發 `alert`，形成 XSS 攻擊。
+
+> React 並不會自動消毒 dangerouslySetInnerHTML，因此此方法應謹慎使用。
+
+#### 建議做法：搭配 DOMPurify 過濾 HTML
+
+[DOMPurify](https://github.com/cure53/DOMPurify) 是目前主流的前端 HTML 淨化函式庫。
+
+##### 安裝
+
+```bash
+npm install dompurify
+```
+
+##### React 結合範例
+
+```jsx
+import React from 'react'
+import DOMPurify from 'dompurify'
+
+export default function App() {
+  const htmlContent = '<p>This is raw <strong>HTML</strong> content.</p>'
+  const sanitizedHtmlContent = DOMPurify.sanitize(htmlContent)
+
+  return (
+    <div className="App">
+      <h1>Raw HTML</h1>
+      <div dangerouslySetInnerHTML={{ __html: sanitizedHtmlContent }}></div>
+    </div>
+  )
+}
+```
+
+這段範例中：
+
+- 將 HTML 資料先經過 DOMPurify 淨化
+- 再用 `dangerouslySetInnerHTML` 插入畫面，避免惡意內容執行
+
+---
+
+### 第二道防線：使用 CSP（Content Security Policy）阻止執行
+
+CSP 是一種瀏覽器層級的防禦機制，用來指定網站可載入或執行的資源來源，達到「就算有惡意 script 插入，也無法執行」的目的。
+
+#### 限定所有資源只能來自同源
+
+```http
+Content-Security-Policy: default-src 'self';
+```
+
+說明：只能從目前網站載入資源，封鎖外部 JS、圖片、CSS，也封鎖 inline script。
+
+1. 允許特定外部資源
+
+```http
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' https://cdn.example.com;
+  style-src 'self' https://fonts.googleapis.com;
+```
+
+這樣允許部分外部來源載入 JS 與 CSS，其他來源仍會被阻擋。
+
+2. 阻擋所有 inline script（強化防禦）
+
+```http
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self';
+```
+
+會封鎖：
+
+- `<script>alert(1)</script>`
+- `<button onclick="doSomething()">`
+
+3. 使用 nonce 允許個別 script 執行
+
+```http
+Content-Security-Policy: script-src 'self' 'nonce-abc123';
+```
+
+HTML 中的 script：
+
+```html
+<script nonce="abc123">
+  console.log('這段可以執行')
+</script>
+```
+
+只有加上指定 nonce 的 script 才能執行，其他的即使內嵌也會被封鎖。
+
+4. 使用 Report-Only 模式回報違規內容
+
+```http
+Content-Security-Policy-Report-Only:
+  default-src 'self';
+  report-uri /csp-report-endpoint;
+```
+
+這種設定不會封鎖資源，但會向後端回報所有違規行為，適合部署前進行測試與偵測。
+
+5. CSP 可設定於：
+
+- HTTP Response Header：
+
+```http
+Content-Security-Policy: default-src 'self';
+```
+
+- HTML Meta 標籤：
+
+```html
+<meta http-equiv="Content-Security-Policy" content="default-src 'self';" />
+```
+
+---
+
+### 第三道防線：降低攻擊影響範圍（Damage Control）
+
+即使有 XSS 存在，也不代表使用者帳號一定會被盜。  
+第三層防線的目標是「即使攻擊發生，也要把傷害降到最低」。
+
+#### 策略一：增加登入驗證層級
+
+- 啟用多重驗證（MFA）：
+  - 簡訊驗證碼
+  - Email 驗證碼
+  - OTP App（例如 Google Authenticator）
+
+  > 就算 token 被竊取，攻擊者沒有第二層驗證也無法登入。
+
+#### 策略二：不讓 token 被 JavaScript 讀取
+
+- 將 JWT 存放於 HttpOnly Cookie（瀏覽器中的 JavaScript 無法存取）
+- 利用 JavaScript 閉包特性，在記憶體中封裝 token，避免暴露在全域變數
+
+  > 這樣即使注入的 XSS 存取到全域變數，也無法竊取 token。
+
+#### 策略三：限制 API 的可存取範圍
+
+- 結合策略二的做法，即使 XSS 存在，也因無法取得 token 而無法呼叫受保護的 API
+
+#### 策略四：限制 token 權限與有效期限
+
+- 採用權限最小化原則（Least Privilege）
+- 為不同角色設計不同權限範圍的 token
+- token 的有效期限不要過長，搭配 refresh token 實作短期驗證
+
+  > 如此可避免單一 token 被盜用時，導致過大的損害範圍。
+
+---
+
+## 瀏覽器內建的 XSS 防禦 API
+
+目前主流瀏覽器逐漸支援兩種內建 API，可協助防範 XSS（跨站腳本攻擊）：
+
+- [`Sanitizer API`](https://developer.mozilla.org/en-US/docs/Web/API/Sanitizer)
+- [`Trusted Types`](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
+
+> ❗ 實務提醒：**尚未廣泛支援，暫不建議在正式產品中依賴**
+
+### 1. Sanitizer API
+
+### 功能介紹
+
+- 自動移除危險 HTML（如 `<script>`, `onerror`, `onclick` 等）
+- 安全插入使用者輸入的 HTML 到 DOM 中
+- 可取代部分 DOMPurify 等第三方套件
+
+#### 使用範例
+
+```js
+const dirty = `<img src=x onerror="alert(1)">Hello <b>World</b>`
+const sanitizer = new Sanitizer() // 可傳入設定參數
+const clean = sanitizer.sanitizeFor('div', dirty)
+document.body.appendChild(clean)
+```
+
+### 2. Trusted Types
+
+Trusted Types 是一種「程式碼層級的防呆機制」，目的是防止開發者無意間寫出容易產生 XSS 的程式碼。
+
+- 限制將字串直接塞進 `innerHTML`、`script.src`、`eval()` 等危險 API
+- 只有經過「受信任的政策（Policy）」處理過的資料，才能被執行
+
+---
+
+## 其他類型的 XSS 攻擊技巧
+
+- ### 經由不安全的 Domain 繞過（Untrusted Subdomain）
+
+  攻擊者控制一個與主站共享 Cookie 的子網域（如 `evil.example.com`），可能會透過：
+  - 設定 `document.domain` 為主網域
+  - 執行跨子網域的資料存取或攻擊
+
+  防範方式：
+  - 不要直接載入第三方Script
+  - 路徑寫完整
+
+- ### 利用 `<base>` 標籤進行繞過
+
+  攻擊者插入 `<base>` 改變相對路徑解析：
+
+  ```html
+  <base href="https://example.com/">
+  <script src="app.js"><script>
+  //會等於執行
+  <script src="https://example.com/app.js"><script>
+  ```
+
+  防範方式：
+  - 設定 CSP 禁止 `<base>`
+  - 移除 `<base>` 標籤（使用 DOMPurify、Sanitizer API 等工具）
+
+- ### UXSS（Universal Cross-Site Scripting）
+
+  UXSS 是一種利用瀏覽器層級漏洞的攻擊方式，與傳統 XSS 不同，並非網站開發者本身的錯誤。
+  - 利用點：瀏覽器層級的漏洞（不是網站開發者的錯）
+  - 結果：攻擊者可以在使用者瀏覽任何網站時注入並執行惡意 JavaScript
+
+  ### 歷史真實案例
+
+  [Copyfish 擴充功能被駭（2017）](https://www.twcert.org.tw/newepaper/cp-66-1016-97163-3.html)
+  - 被釣魚信騙取帳號，更新版本中被植入惡意 JavaScript。
+  - 成功注入 script 到所有瀏覽的網頁，執行任意 JS。
+  - 影響：竊取密碼、偽造銀行頁面、劫持帳號。
+
+  ### 防範方式
+  - 不要使用來路不明的瀏覽器擴充功能（Extension）
+  - 定期更新瀏覽器版本
+  - 安裝擴充功能時，留意是否要求「讀取所有網站資料」等高權限
+  - 在企業或開發環境中，限制可安裝的擴充功能清單

