@@ -8,7 +8,7 @@ interface Project {
 const projectsData: Project[] = [
   {
     title: '大圍棋教室',
-    description: `使用 Vue.js全家桶，及Lottie動畫製作的圍棋教學網站。`,
+    description: `使用 Vue.js全家桶，及Lottie動畫製作的圍棋課程網站。`,
     imgSrc: '/static/images/go-class.png',
     href: 'https://22495521.github.io/BigGo/#/FrontPage',
   },
