@@ -1,0 +1,101 @@
+---
+title: 前端資安宇宙 （六）Same-Origin vs Same-Site
+date: '2025-07-12'
+tags: ['security', 'front-end']
+draft: false
+summary: 'Same-Origin vs Same-Site —— 差在哪？哪個比較嚴格？'
+---
+
+## 前言
+
+這篇文章我們先來認識一個常見的面試題：Same-Origin 跟 Same-Site 的差別，下篇文章會再帶大家深入了解它們各自的用途與應用場景，這個主題不管是前端還是後端，一定都會碰到，那我們就開始吧！
+
+## 一、什麼是 Origin（來源）？
+
+`Origin` 是由三個部分組成：
+
+> Origin = 協定（protocol） + 主機（host）+ 埠號（port）
+
+只要這三個有任一不同，就會被視為「不同來源（cross-origin）」，瀏覽器會阻擋資料存取。
+
+### Same-Origin 範例
+
+---
+
+    http://example.com
+    http://example.com:80
+
+---
+
+- 協定相同：http
+- 網域相同：example.com
+- 埠號相同：預設是 80
+
+### 非 Same-Origin 範例
+
+| 網址 A             | 網址 B                  | 差異       | 是否 Same-Origin |
+| ------------------ | ----------------------- | ---------- | ---------------- |
+| http://example.com | https://example.com     | 協定不同   | 否               |
+| http://example.com | http://api.example.com  | 子網域不同 | 否               |
+| http://example.com | http://example.com:3000 | 埠號不同   | 否               |
+
+## 二、什麼是 Site？
+
+它不像 Origin 那麼嚴格，不看子網域、不看 Port，
+
+> 只要協定（http 或 https）一樣、主網域也一樣，就算同一個 Site。
+
+我直接放上表格，可能大家比較好理解：
+
+| 網址 A                | 網址 B                   | Same-Site？ | 原因說明             |
+| --------------------- | ------------------------ | ----------- | -------------------- |
+| https://a.example.com | https://b.example.com    | 是          | 主網域相同，協定相同 |
+| https://example.com   | https://example.com:8443 | 是          | Port 不影響判斷      |
+| https://example.com   | http://example.com       | 否          | 協定不同，不算同站   |
+| https://example.com   | https://evil.com         | 否          | 主網域不同           |
+
+---
+
+## 三、例外：Public Suffix 的陷阱
+
+剛剛我們說，只要主網域一樣就算同一個 Site。  
+但其實還是有「例外」——有些主網域其實是「**共享的**」，不是你專屬擁有的，這時候瀏覽器會把它當作不同的 Site。
+
+這種共享的網域叫做 **Public Suffix（公共字尾）**，例如：
+
+- `github.io`
+
+### 為什麼要這樣設計？
+
+因為這些網域通常是大家共用的：
+
+- `abc.github.io` 是你的小站
+- `hacker.github.io` 可能是攻擊者的站
+
+雖然主網域都是 `github.io`，但瀏覽器不會把它們當作同一個 Site。
+
+---
+
+### Public Suffix 判斷範例：
+
+| 網址 A                | 網址 B                | Same-Site？ | 原因                         |
+| --------------------- | --------------------- | ----------- | ---------------------------- |
+| https://a.example.com | https://b.example.com | 是          | 主網域相同                   |
+| https://a.github.io   | https://b.github.io   | 否          | `github.io` 是 public suffix |
+
+你可以在這裡查詢有哪些網域被列為 [public suffix](https://url.spec.whatwg.org/#host-registrable-domain)
+
+---
+
+最後來一個最終版本的表格吧!
+
+## Same-Origin vs Same-Site 範例對照
+
+| 網址 A                | 網址 B                   | Same-Origin | Same-Site           |
+| --------------------- | ------------------------ | ----------- | ------------------- |
+| https://example.com   | https://example.com      | 是          | 是                  |
+| https://example.com   | https://example.com:8443 | 否          | 是                  |
+| https://example.com   | http://example.com       | 否          | 否                  |
+| https://a.example.com | https://b.example.com    | 否          | 是                  |
+| https://a.github.io   | https://b.github.io      | 否          | 否（public suffix） |
+| http://example.com    | http://api.example.com   | 否          | 是                  |

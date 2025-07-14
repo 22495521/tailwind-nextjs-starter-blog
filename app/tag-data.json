@@ -1,6 +1,6 @@
 {
+  "security": 7,
+  "front-end": 7,
   "read": 1,
-  "security": 5,
-  "xss": 5,
-  "front-end": 5
+  "xss": 5
 }
