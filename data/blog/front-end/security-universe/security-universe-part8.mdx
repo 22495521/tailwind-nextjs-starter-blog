@@ -1,0 +1,219 @@
+---
+title: 前端資安宇宙（八）CSRF 是什麼？
+date: '2025-07-20'
+tags: ['security', 'front-end']
+draft: false
+summary: 'CSRF 是什麼？不只是按個按鈕這麼簡單'
+---
+
+# CSRF 是什麼？不只是按個按鈕這麼簡單
+
+## 前言
+
+你有沒有想過，當你登入了一個網站，卻在背景被另一個網站偷偷發送 request，導致帳號資料被改、錢被轉走、登出、刪帳號…這些情況其實都不是駭客入侵，而是來自一種經典的攻擊手法 —— **CSRF（Cross-Site Request Forgery，跨站請求偽造）**。
+
+你可能會想：
+
+> 蛤？不是要先被 XSS 才能操作我帳號嗎？
+
+不一定，CSRF 完全不需要操作你的瀏覽器，只要你**登入過**某個網站，**Session（或 Cookie）還在有效期內**，攻擊者就可以「借用」你的身份幫你偷偷發送請求。
+
+## 為什麼會有 CSRF？
+
+關鍵就是：
+
+> **瀏覽器會自動幫你夾帶 cookie！**
+
+來，我們直接看個流程圖，你就懂：
+
+```txt
+① 你登入了 `bank.com`，取得一個 session cookie
+   │
+   ▼
+② 沒登出就去逛 `evil.com`
+   │
+   ▼
+③ `evil.com` 裡面藏了一張圖片或一段 JS（像這樣）：
+       <img src="https://bank.com/transfer?to=hacker&amount=10000" />
+   │
+   ▼
+④ 瀏覽器發出這個請求時，會自動附上 `bank.com` 的 cookie（因為是同來源）
+   │
+   ▼
+⑤ `bank.com` 收到後以為是你本人要轉帳，錢就真的出去了！
+
+```
+
+> 所以重點不是 request 怎麼發出來的，而是**有你的 cookie 身份在**，後端就以為你是本人！
+
+這就叫 **跨站請求偽造**（Cross-Site Request Forgery）—— 在你不知道的情況下，對你已登入的網站發出請求。
+
+而防範的關鍵，就是**讓這些偽造請求被識破**。我們接下來就來說說有哪些方法能防住這招。
+
+---
+
+## CSRF 防禦方法
+
+### 1. 檢查 Referer Header
+
+`Referer` 是什麼？就是告訴後端「我這個 request 是從哪個頁面點過來的」。
+
+如果你收到的請求是從 `evil.com` 發過來的，而你預期只能接受來自 `bank.com` 的請求，那你就該擋下來！
+
+```js
+// Express 中可簡單這樣寫
+app.use((req, res, next) => {
+  const referer = req.get('referer')
+  if (referer && !referer.startsWith('https://bank.com')) {
+    return res.status(403).send('Forbidden: bad referer')
+  }
+  next()
+})
+```
+
+但這方法有幾個問題：
+
+- Referer 可能會被瀏覽器或瀏覽器擴充套件遮掉
+- 有些情況下會沒有 Referer（例如直接發 request）
+
+> 所以這方法只能當作**輔助檢查**，不是萬無一失。
+
+---
+
+### 2. 圖形驗證碼（CAPTCHA）
+
+這你一定看過，就是那種「請輸入圖片中的文字」的東西。
+
+因為 CSRF 的特點是「自動送出請求」，但圖形驗證碼會強制使用者手動輸入，讓惡意網站沒辦法輕易自動送 request。
+
+```txt
+① 惡意網站試圖送出請求
+   │
+   ▼
+② 伺服器要求輸入圖形驗證碼
+   │
+   ▼
+③ 攻擊程式不會辨識圖片，自然也無法通過驗證
+```
+
+缺點是：會破壞使用者體驗，常用在登入、註冊、轉帳等風險操作。
+
+---
+
+### 3. CSRF Token（最主流也最安全的做法）
+
+這是目前最常見也最推薦的做法：
+
+> **每次要發送表單時，都隨機產生一組 token，只有在該使用者的 session 中存在的 token 才會被接受。**
+
+流程像這樣：
+
+```txt
+① 使用者打開表單頁（ex: 編輯個人資料）
+   │
+   ▼
+② 後端產生一組亂數 token → 放進 HTML 裡 & 記在 session
+   │
+   ▼
+③ 使用者提交表單時 → token 一起送上
+   │
+   ▼
+④ 後端收到後 → 驗證 token 是否正確
+   │
+   ├─ OK → 執行操作
+   └─ 錯誤或缺少 → 擋掉請求
+```
+
+實務上這個 CSRF Token 要怎麼加？
+
+> 大部分的情況下，我們會把它加在 `<form>` 裡面，或者寫在 `<meta>` 裡讓前端 JS 自己加到 request header。
+
+#### 方法一：放在 `<form>` 裡（最常見）
+
+這種方式最傳統但也最穩，通常會這樣寫：
+
+```html
+<form method="POST" action="/update-profile">
+  <input type="hidden" name="_csrf" value="隨機產生的 token" />
+  <!-- 其他欄位 -->
+</form>
+```
+
+後端收到時就可以從 `req.body._csrf` 抓出來比對，有就放行，沒有或不對就直接擋掉。
+
+---
+
+#### 方法二：放在 `<meta>` 裡，讓前端 JS 帶進 header
+
+如果你是用 Ajax（像 fetch 或 axios）發 request，就不能靠 form 了，這時候常見做法是把 token 放進 HTML head 裡的 `<meta>`：
+
+```html
+<meta name="csrf-token" content="隨機產生的 token" />
+```
+
+---
+
+### 4. SameSite Cookie（瀏覽器原生防禦）
+
+除了靠程式邏輯，其實現在主流瀏覽器也有一個**瀏覽器層級的防禦方式**叫做 `SameSite`。
+
+我在之前的文章當中有提到何謂`SameSite`，忘記的人可以回去複習。
+
+這是什麼？簡單說，就是：
+
+> 告訴瀏覽器：「這顆 cookie 只能在同一個網站中使用」，**跨站請求時就不會附帶**這顆 cookie。
+
+這樣 CSRF 就直接失效了，因為少了 cookie，後端根本不知道你是誰。
+
+有三種設定方式：
+
+| 值       | 說明                                                                     |
+| -------- | ------------------------------------------------------------------------ |
+| `Strict` | **最安全**，完全禁止第三方請求帶 cookie（連你自己貼 `<a>` 點過來也不行） |
+| `Lax`    | 只允許「安全請求」帶 cookie（例如 GET 的超連結點擊）                     |
+| `None`   | **允許所有情況都帶 cookie**，但必須加上 `Secure` 才能使用                |
+
+範例設定（Express 搭配 cookie-parser）：
+
+```js
+res.cookie('session_id', token, {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Strict', // 可選 Strict / Lax / None
+})
+```
+
+預設情況下，`SameSite` 是 `Lax`，但建議敏感操作（像是登入憑證）都設成 `Strict` 最安全。
+
+> 要注意：設 `SameSite=None` 時**一定要搭配 `secure: true`**（也就是只能在 HTTPS 下使用），否則會被瀏覽器直接擋掉！
+
+---
+
+其實實務上最好是 **CSRF Token + SameSite Cookie 雙重防禦一起用**，才夠保險。
+
+為什麼？
+
+> 因為 SameSite Cookie 只能防「跨站」的 CSRF，但還有一種更陰險的：**Same-Site CSRF**。
+
+這是什麼意思？來，我們舉個例子：
+
+```txt
+你登入了 admin.example.com
+   │
+   ▼
+evil.example.com 是攻擊者設的站，但同樣掛在 example.com 底下
+   │
+   ▼
+瀏覽器認為這是「同一個 Site」，SameSite Cookie 依然會帶上
+   │
+   ▼
+攻擊就成功送到 admin.example.com，SameSite 防不了！
+```
+
+這種情況下，**只有 CSRF Token 能擋下來**，因為攻擊者沒辦法預先拿到 token 的值。
+
+所以記住一句話：
+
+> **SameSite 是基本防線，CSRF Token 才是主力防守。**
+
+雙管齊下，才不會一個洞被鑽了你還不知道。
